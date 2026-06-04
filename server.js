@@ -108,6 +108,14 @@ function normalizeCode(value) {
   return String(value || '').trim();
 }
 
+function normalizePem(value) {
+  return String(value || '')
+    .trim()
+    .replace(/\r\n/g, '\n')
+    .replace(/\\n/g, '\n')
+    .replace(/^['"]|['"]$/g, '');
+}
+
 function buildCodeDoc(input) {
   const now = input.createdAt || Date.now();
   return {
@@ -116,6 +124,7 @@ function buildCodeDoc(input) {
     durationMs: Number(input.durationMs || 0),
     note: String(input.note || '').trim(),
     createdAt: now,
+    boundMachineId: normalizeCode(input.boundMachineId || input.machineId) || null,
     used: Boolean(input.used),
     usedAt: input.usedAt || null,
     usedBy: input.usedBy || null,
@@ -124,12 +133,21 @@ function buildCodeDoc(input) {
 }
 
 function signLicense(privateKey, payload) {
-  const payloadB64 = Buffer.from(JSON.stringify(payload), 'utf8').toString('base64');
-  const signer = crypto.createSign('RSA-SHA256');
-  signer.update(payloadB64, 'utf8');
-  signer.end();
-  const signatureB64 = signer.sign(privateKey).toString('base64');
-  return { payloadB64, signatureB64 };
+  const normalizedPrivateKey = normalizePem(privateKey);
+  if (!normalizedPrivateKey) {
+    throw new Error('PRIVATE_KEY_MISSING');
+  }
+
+  try {
+    const payloadB64 = Buffer.from(JSON.stringify(payload), 'utf8').toString('base64');
+    const signer = crypto.createSign('RSA-SHA256');
+    signer.update(payloadB64, 'utf8');
+    signer.end();
+    const signatureB64 = signer.sign(normalizedPrivateKey).toString('base64');
+    return { payloadB64, signatureB64 };
+  } catch (error) {
+    throw new Error('LICENSE_PRIVATE_KEY_PEM_INVALID_FORMAT');
+  }
 }
 
 async function getMongoClient() {
@@ -196,13 +214,17 @@ async function claimCode(code, machineId, hostname, platform) {
   await ensureIndexes();
   const collection = await getCodesCollection();
   const normalizedCode = normalizeCode(code);
+  const normalizedMachineId = normalizeCode(machineId);
   const current = await collection.findOne({ code: normalizedCode });
   const now = Date.now();
 
   if (!current) return { status: 'not_found' };
   if (current.appId && current.appId !== APP_ID) return { status: 'app_mismatch' };
+  if (current.boundMachineId && current.boundMachineId !== normalizedMachineId) {
+    return { status: 'machine_mismatch', current };
+  }
   if (current.used) {
-    if (current.usedBy?.machineId && current.usedBy.machineId === machineId && current.activation) {
+    if (current.usedBy?.machineId && current.usedBy.machineId === normalizedMachineId && current.activation) {
       return { status: 'reuse_same_machine', current };
     }
     return { status: 'already_used', current };
@@ -223,7 +245,7 @@ async function claimCode(code, machineId, hostname, platform) {
       $set: {
         used: true,
         usedAt: now,
-        usedBy: { machineId, hostname, platform },
+        usedBy: { machineId: normalizedMachineId, hostname, platform },
         activation
       }
     },
@@ -234,8 +256,11 @@ async function claimCode(code, machineId, hostname, platform) {
     const fresh = await collection.findOne({ code: normalizedCode });
     if (!fresh) return { status: 'not_found' };
     if (fresh.appId && fresh.appId !== APP_ID) return { status: 'app_mismatch' };
+    if (fresh.boundMachineId && fresh.boundMachineId !== normalizedMachineId) {
+      return { status: 'machine_mismatch', current: fresh };
+    }
     if (fresh.used) {
-      if (fresh.usedBy?.machineId && fresh.usedBy.machineId === machineId && fresh.activation) {
+      if (fresh.usedBy?.machineId && fresh.usedBy.machineId === normalizedMachineId && fresh.activation) {
         return { status: 'reuse_same_machine', current: fresh };
       }
       return { status: 'already_used', current: fresh };
@@ -289,6 +314,7 @@ async function handleRequest(req, res, keys) {
     const durationMs = parseDurationMs(body.durationMs || body.duration || body.plan);
     const appId = String(body.appId || APP_ID).trim();
     const note = String(body.note || '').trim();
+    const boundMachineId = String(body.boundMachineId || body.machineId || '').trim();
 
     if (!code) {
       return sendJson(res, 400, { ok: false, error: 'CODE_REQUIRED' });
@@ -307,7 +333,8 @@ async function handleRequest(req, res, keys) {
         code,
         appId,
         durationMs,
-        note
+        note,
+        boundMachineId: boundMachineId || null
       });
 
       return sendJson(res, 201, {
@@ -348,6 +375,14 @@ async function handleRequest(req, res, keys) {
     }
     if (claim.status === 'app_mismatch') {
       return sendJson(res, 400, { ok: false, error: 'CODE_APP_MISMATCH' });
+    }
+    if (claim.status === 'machine_mismatch') {
+      return sendJson(res, 400, {
+        ok: false,
+        error: 'CODE_MACHINE_MISMATCH',
+        boundMachineId: claim.current?.boundMachineId || null,
+        currentMachineId: machineId
+      });
     }
     if (claim.status === 'already_used') {
       return sendJson(res, 409, {

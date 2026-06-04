@@ -34,6 +34,14 @@ export default {
       if (claim.status === 'app_mismatch') {
         return json({ ok: false, error: 'CODE_APP_MISMATCH' }, { status: 400 });
       }
+      if (claim.status === 'machine_mismatch') {
+        return json({
+          ok: false,
+          error: 'CODE_MACHINE_MISMATCH',
+          boundMachineId: claim.current?.boundMachineId || null,
+          currentMachineId: machineId
+        }, { status: 400 });
+      }
       if (claim.status === 'already_used') {
         return json({
           ok: false,

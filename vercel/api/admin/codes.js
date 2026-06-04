@@ -20,6 +20,7 @@ export default {
       const code = String(body.code || '').trim();
       const durationMs = parseDurationMs(body.durationMs || body.duration || body.plan);
       const note = String(body.note || '').trim();
+      const boundMachineId = String(body.boundMachineId || body.machineId || '').trim();
 
       if (!code) {
         return json({ ok: false, error: 'CODE_REQUIRED' }, { status: 400 });
@@ -38,6 +39,7 @@ export default {
         appId: 'amz-us-app',
         durationMs,
         note,
+        boundMachineId: boundMachineId || null,
         createdAt: Date.now(),
         used: false,
         usedAt: null,

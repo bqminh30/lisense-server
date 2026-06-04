@@ -51,18 +51,36 @@ export function normalizeCode(value) {
   return String(value || '').trim();
 }
 
+export function normalizePem(value) {
+  return String(value || '')
+    .trim()
+    .replace(/\r\n/g, '\n')
+    .replace(/\\n/g, '\n')
+    .replace(/^['"]|['"]$/g, '');
+}
+
 export function signLicense(privateKeyPem, payload) {
-  const payloadB64 = Buffer.from(JSON.stringify(payload), 'utf8').toString('base64');
-  const signer = crypto.createSign('RSA-SHA256');
-  signer.update(payloadB64, 'utf8');
-  signer.end();
-  const signatureB64 = signer.sign(privateKeyPem).toString('base64');
-  return { payloadB64, signatureB64 };
+  const normalizedPrivateKeyPem = normalizePem(privateKeyPem);
+  if (!normalizedPrivateKeyPem) {
+    throw new Error('PRIVATE_KEY_MISSING');
+  }
+
+  try {
+    const payloadB64 = Buffer.from(JSON.stringify(payload), 'utf8').toString('base64');
+    const signer = crypto.createSign('RSA-SHA256');
+    signer.update(payloadB64, 'utf8');
+    signer.end();
+    const signatureB64 = signer.sign(normalizedPrivateKeyPem).toString('base64');
+    return { payloadB64, signatureB64 };
+  } catch (error) {
+    throw new Error('LICENSE_PRIVATE_KEY_PEM_INVALID_FORMAT');
+  }
 }
 
 export function buildCodeDoc(input) {
   const code = normalizeCode(input.code);
   const now = input.createdAt || Date.now();
+  const boundMachineId = normalizeCode(input.boundMachineId || input.machineId);
 
   return {
     code,
@@ -70,6 +88,7 @@ export function buildCodeDoc(input) {
     durationMs: Number(input.durationMs || 0),
     note: String(input.note || '').trim(),
     createdAt: now,
+    boundMachineId: boundMachineId || null,
     used: Boolean(input.used),
     usedAt: input.usedAt || null,
     usedBy: input.usedBy || null,
@@ -152,6 +171,7 @@ export async function claimCodeForActivation(code, machineId, hostname, platform
   await ensureMongoIndexes();
   const collection = await getCodesCollection();
   const normalizedCode = normalizeCode(code);
+  const normalizedMachineId = normalizeCode(machineId);
   const now = Date.now();
   const current = await collection.findOne({ code: normalizedCode });
 
@@ -163,8 +183,15 @@ export async function claimCodeForActivation(code, machineId, hostname, platform
     return { status: 'app_mismatch' };
   }
 
+  if (current.boundMachineId && current.boundMachineId !== normalizedMachineId) {
+    return {
+      status: 'machine_mismatch',
+      current
+    };
+  }
+
   if (current.used) {
-    if (current.usedBy?.machineId && current.usedBy.machineId === machineId && current.activation) {
+    if (current.usedBy?.machineId && current.usedBy.machineId === normalizedMachineId && current.activation) {
       return {
         status: 'reuse_same_machine',
         current
@@ -192,7 +219,7 @@ export async function claimCodeForActivation(code, machineId, hostname, platform
       $set: {
         used: true,
         usedAt: now,
-        usedBy: { machineId, hostname, platform },
+        usedBy: { machineId: normalizedMachineId, hostname, platform },
         activation
       }
     },
@@ -221,6 +248,12 @@ export async function claimCodeForActivation(code, machineId, hostname, platform
     }
     if (fresh.appId && fresh.appId !== APP_ID) {
       return { status: 'app_mismatch' };
+    }
+    if (fresh.boundMachineId && fresh.boundMachineId !== normalizedMachineId) {
+      return {
+        status: 'machine_mismatch',
+        current: fresh
+      };
     }
     return { status: 'conflict' };
   }
