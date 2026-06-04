@@ -23,6 +23,8 @@ Supported durations:
 - `1d`
 - `3d`
 - `1m`
+- `1y`
+- `10y`
 - raw milliseconds, for example `43200000`
 
 ## Endpoint

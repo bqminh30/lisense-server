@@ -11,7 +11,7 @@ function parseDurationMs(value) {
   const direct = Number(raw);
   if (Number.isFinite(direct) && direct > 0) return direct;
 
-  const match = raw.match(/^(\d+)\s*(h|d|w|m)$/);
+  const match = raw.match(/^(\d+)\s*(h|d|w|m|y)$/);
   if (!match) return null;
 
   const n = Number(match[1]);
@@ -20,7 +20,8 @@ function parseDurationMs(value) {
     h: 60 * 60 * 1000,
     d: 24 * 60 * 60 * 1000,
     w: 7 * 24 * 60 * 60 * 1000,
-    m: 30 * 24 * 60 * 60 * 1000
+    m: 30 * 24 * 60 * 60 * 1000,
+    y: 365 * 24 * 60 * 60 * 1000
   };
 
   return n * map[unit];
@@ -75,7 +76,7 @@ async function main() {
 
   const durationMs = parseDurationMs(durationArg);
   if (!durationMs) {
-    console.error('Invalid duration. Use values like 12h, 3d, 1m, or milliseconds.');
+    console.error('Invalid duration. Use values like 12h, 3d, 1m, 1y, or milliseconds.');
     process.exit(1);
   }
 

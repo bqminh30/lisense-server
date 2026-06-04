@@ -30,7 +30,7 @@ export function parseDurationMs(value) {
   const direct = Number(raw);
   if (Number.isFinite(direct) && direct > 0) return direct;
 
-  const match = raw.match(/^(\d+)\s*(h|d|w|m)$/);
+  const match = raw.match(/^(\d+)\s*(h|d|w|m|y)$/);
   if (!match) return null;
 
   const n = Number(match[1]);
@@ -41,7 +41,8 @@ export function parseDurationMs(value) {
     h: 60 * 60 * 1000,
     d: 24 * 60 * 60 * 1000,
     w: 7 * 24 * 60 * 60 * 1000,
-    m: 30 * 24 * 60 * 60 * 1000
+    m: 30 * 24 * 60 * 60 * 1000,
+    y: 365 * 24 * 60 * 60 * 1000
   };
 
   return n * map[unit];
