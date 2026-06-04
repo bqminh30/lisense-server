@@ -1,0 +1,20 @@
+[
+  {
+    "code": "123abc",
+    "appId": "amz-us-app",
+    "durationMs": 43200000,
+    "note": "",
+    "createdAt": 1780543208346,
+    "used": true,
+    "usedAt": 1780543580347,
+    "usedBy": {
+      "machineId": "d3aa4f0fa9d94f680e37e7bbba7f2ab4900c00399e01bbba987ba8dec5a56591",
+      "hostname": "DESKTOP-UCH8E8H",
+      "platform": "win32"
+    },
+    "activation": {
+      "issuedAt": 1780543580347,
+      "expiresAt": 1780586780347
+    }
+  }
+]
