@@ -1,4 +1,4 @@
-import { json, loadCode, saveCode, signLicense } from './_lib.js';
+import { json, claimCodeForActivation, signLicense } from './_lib.js';
 
 export default {
   async fetch(request) {
@@ -21,46 +21,42 @@ export default {
         return json({ ok: false, error: 'CODE_AND_MACHINE_REQUIRED' }, { status: 400 });
       }
 
-      const codeData = await loadCode(code);
-      if (!codeData) {
-        return json({ ok: false, error: 'CODE_NOT_FOUND' }, { status: 404 });
-      }
-      if (codeData.used) {
-        return json({
-          ok: false,
-          error: 'CODE_ALREADY_USED',
-          usedAt: codeData.usedAt,
-          usedBy: codeData.usedBy
-        }, { status: 409 });
-      }
-
       const privateKeyPem = String(process.env.LICENSE_PRIVATE_KEY_PEM || '').trim();
       if (!privateKeyPem) {
         return json({ ok: false, error: 'PRIVATE_KEY_MISSING' }, { status: 500 });
       }
 
-      const now = Date.now();
+      const claim = await claimCodeForActivation(code, machineId, hostname, platform);
+
+      if (claim.status === 'not_found') {
+        return json({ ok: false, error: 'CODE_NOT_FOUND' }, { status: 404 });
+      }
+      if (claim.status === 'app_mismatch') {
+        return json({ ok: false, error: 'CODE_APP_MISMATCH' }, { status: 400 });
+      }
+      if (claim.status === 'already_used') {
+        return json({
+          ok: false,
+          error: 'CODE_ALREADY_USED',
+          usedAt: claim.current?.usedAt || null,
+          usedBy: claim.current?.usedBy || null
+        }, { status: 409 });
+      }
+      if (claim.status !== 'claimed' || !claim.code) {
+        return json({ ok: false, error: 'ACTIVATION_CONFLICT' }, { status: 409 });
+      }
+
       const payload = {
         appId: 'amz-us-app',
-        codeId: codeData.code,
+        codeId: claim.code.code,
         machineId,
-        issuedAt: now,
-        expiresAt: now + Number(codeData.durationMs || 0),
+        issuedAt: claim.code.activation.issuedAt,
+        expiresAt: claim.code.activation.expiresAt,
         hostname,
         platform
       };
 
       const license = signLicense(privateKeyPem, payload);
-
-      codeData.used = true;
-      codeData.usedAt = now;
-      codeData.usedBy = { machineId, hostname, platform };
-      codeData.activation = {
-        issuedAt: payload.issuedAt,
-        expiresAt: payload.expiresAt
-      };
-
-      await saveCode(codeData);
 
       return json({
         ok: true,

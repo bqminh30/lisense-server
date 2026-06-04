@@ -2,20 +2,24 @@ const http = require('http');
 const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
+const { MongoClient } = require('mongodb');
 
 const APP_ID = 'amz-us-app';
 const PORT = Number(process.env.PORT || 8787);
 const ADMIN_TOKEN = String(process.env.ADMIN_TOKEN || 'dev-admin-token');
+const MONGODB_URI = String(process.env.MONGODB_URI || '').trim();
+const MONGODB_DB_NAME = String(process.env.MONGODB_DB_NAME || 'amz_license').trim();
 
 const rootDir = __dirname;
-const dataDir = path.join(rootDir, 'data');
 const keysDir = path.join(rootDir, 'keys');
-const codesPath = path.join(dataDir, 'codes.json');
 const privateKeyPath = path.join(keysDir, 'private.pem');
 const publicKeyPath = path.join(keysDir, 'public.pem');
 
+let mongoClientPromise = global.__amzLicenseMongoClientPromise;
+let mongoDbPromise = global.__amzLicenseMongoDbPromise;
+let indexesPromise = global.__amzLicenseMongoIndexesPromise;
+
 function ensureDirs() {
-  fs.mkdirSync(dataDir, { recursive: true });
   fs.mkdirSync(keysDir, { recursive: true });
 }
 
@@ -38,23 +42,6 @@ function loadOrCreateKeyPair() {
   fs.writeFileSync(privateKeyPath, privateKey, 'utf8');
   fs.writeFileSync(publicKeyPath, publicKey, 'utf8');
   return { privateKey, publicKey };
-}
-
-function loadCodes() {
-  ensureDirs();
-  if (!fs.existsSync(codesPath)) return [];
-
-  try {
-    const parsed = JSON.parse(fs.readFileSync(codesPath, 'utf8'));
-    return Array.isArray(parsed) ? parsed : [];
-  } catch (_) {
-    return [];
-  }
-}
-
-function saveCodes(codes) {
-  ensureDirs();
-  fs.writeFileSync(codesPath, JSON.stringify(codes, null, 2), 'utf8');
 }
 
 function readJson(req) {
@@ -91,10 +78,6 @@ function authAdmin(req) {
   return String(req.headers['x-admin-token'] || '') === ADMIN_TOKEN;
 }
 
-function findCode(codes, value) {
-  return codes.find((item) => item.code === value);
-}
-
 function parseDurationMs(value) {
   const raw = String(value || '').trim().toLowerCase();
   if (!raw) return null;
@@ -121,6 +104,25 @@ function parseDurationMs(value) {
   return n * map[unit];
 }
 
+function normalizeCode(value) {
+  return String(value || '').trim();
+}
+
+function buildCodeDoc(input) {
+  const now = input.createdAt || Date.now();
+  return {
+    code: normalizeCode(input.code),
+    appId: String(input.appId || APP_ID).trim(),
+    durationMs: Number(input.durationMs || 0),
+    note: String(input.note || '').trim(),
+    createdAt: now,
+    used: Boolean(input.used),
+    usedAt: input.usedAt || null,
+    usedBy: input.usedBy || null,
+    activation: input.activation || null
+  };
+}
+
 function signLicense(privateKey, payload) {
   const payloadB64 = Buffer.from(JSON.stringify(payload), 'utf8').toString('base64');
   const signer = crypto.createSign('RSA-SHA256');
@@ -130,18 +132,108 @@ function signLicense(privateKey, payload) {
   return { payloadB64, signatureB64 };
 }
 
-function normalizeCodeItem(item) {
-  return {
-    code: String(item.code || '').trim(),
-    appId: String(item.appId || APP_ID).trim(),
-    durationMs: Number(item.durationMs || 0),
-    note: String(item.note || '').trim(),
-    createdAt: item.createdAt || Date.now(),
-    used: Boolean(item.used),
-    usedAt: item.usedAt || null,
-    usedBy: item.usedBy || null,
-    activation: item.activation || null
+async function getMongoClient() {
+  if (!MONGODB_URI) {
+    throw new Error('MONGODB_URI_MISSING');
+  }
+
+  if (!mongoClientPromise) {
+    const client = new MongoClient(MONGODB_URI);
+    mongoClientPromise = client.connect();
+    global.__amzLicenseMongoClientPromise = mongoClientPromise;
+  }
+
+  return mongoClientPromise;
+}
+
+async function getMongoDb() {
+  if (!mongoDbPromise) {
+    mongoDbPromise = getMongoClient().then((client) => client.db(MONGODB_DB_NAME));
+    global.__amzLicenseMongoDbPromise = mongoDbPromise;
+  }
+
+  return mongoDbPromise;
+}
+
+async function getCodesCollection() {
+  const db = await getMongoDb();
+  return db.collection('codes');
+}
+
+async function ensureIndexes() {
+  if (!indexesPromise) {
+    indexesPromise = (async () => {
+      const collection = await getCodesCollection();
+      await collection.createIndex({ code: 1 }, { unique: true });
+    })();
+    global.__amzLicenseMongoIndexesPromise = indexesPromise;
+  }
+
+  return indexesPromise;
+}
+
+async function listCodes() {
+  await ensureIndexes();
+  const collection = await getCodesCollection();
+  return collection.find({}).sort({ createdAt: -1 }).toArray();
+}
+
+async function loadCode(code) {
+  await ensureIndexes();
+  const collection = await getCodesCollection();
+  return collection.findOne({ code: normalizeCode(code) });
+}
+
+async function saveCode(codeData) {
+  await ensureIndexes();
+  const collection = await getCodesCollection();
+  const doc = buildCodeDoc(codeData);
+  const result = await collection.insertOne(doc);
+  return { ...doc, _id: result.insertedId };
+}
+
+async function claimCode(code, machineId, hostname, platform) {
+  await ensureIndexes();
+  const collection = await getCodesCollection();
+  const normalizedCode = normalizeCode(code);
+  const current = await collection.findOne({ code: normalizedCode });
+  const now = Date.now();
+
+  if (!current) return { status: 'not_found' };
+  if (current.appId && current.appId !== APP_ID) return { status: 'app_mismatch' };
+  if (current.used) return { status: 'already_used', current };
+
+  const activation = {
+    issuedAt: now,
+    expiresAt: now + Number(current.durationMs || 0)
   };
+
+  const result = await collection.findOneAndUpdate(
+    {
+      code: normalizedCode,
+      appId: APP_ID,
+      used: false
+    },
+    {
+      $set: {
+        used: true,
+        usedAt: now,
+        usedBy: { machineId, hostname, platform },
+        activation
+      }
+    },
+    { returnDocument: 'after' }
+  );
+
+  if (!result || !result.value) {
+    const fresh = await collection.findOne({ code: normalizedCode });
+    if (!fresh) return { status: 'not_found' };
+    if (fresh.appId && fresh.appId !== APP_ID) return { status: 'app_mismatch' };
+    if (fresh.used) return { status: 'already_used', current: fresh };
+    return { status: 'conflict' };
+  }
+
+  return { status: 'claimed', code: result.value };
 }
 
 async function handleRequest(req, res, keys) {
@@ -153,7 +245,8 @@ async function handleRequest(req, res, keys) {
     return sendJson(res, 200, {
       ok: true,
       appId: APP_ID,
-      port: PORT
+      port: PORT,
+      storage: 'mongo'
     });
   }
 
@@ -169,7 +262,7 @@ async function handleRequest(req, res, keys) {
       return sendJson(res, 401, { ok: false, error: 'UNAUTHORIZED' });
     }
 
-    const codes = loadCodes().map(normalizeCodeItem);
+    const codes = await listCodes();
     return sendJson(res, 200, {
       ok: true,
       codes
@@ -190,34 +283,33 @@ async function handleRequest(req, res, keys) {
     if (!code) {
       return sendJson(res, 400, { ok: false, error: 'CODE_REQUIRED' });
     }
-    if (!durationMs || durationMs <= 0) {
+    if (!durationMs) {
       return sendJson(res, 400, { ok: false, error: 'DURATION_REQUIRED' });
     }
 
-    const codes = loadCodes().map(normalizeCodeItem);
-    if (findCode(codes, code)) {
+    const existing = await loadCode(code);
+    if (existing) {
       return sendJson(res, 409, { ok: false, error: 'CODE_ALREADY_EXISTS' });
     }
 
-    const item = normalizeCodeItem({
-      code,
-      appId,
-      durationMs,
-      note,
-      createdAt: Date.now(),
-      used: false,
-      usedAt: null,
-      usedBy: null,
-      activation: null
-    });
+    try {
+      const created = await saveCode({
+        code,
+        appId,
+        durationMs,
+        note
+      });
 
-    codes.push(item);
-    saveCodes(codes);
-
-    return sendJson(res, 201, {
-      ok: true,
-      code: item
-    });
+      return sendJson(res, 201, {
+        ok: true,
+        code: created
+      });
+    } catch (error) {
+      if (error?.code === 11000) {
+        return sendJson(res, 409, { ok: false, error: 'CODE_ALREADY_EXISTS' });
+      }
+      throw error;
+    }
   }
 
   if (req.method === 'POST' && pathname === '/activate') {
@@ -235,46 +327,41 @@ async function handleRequest(req, res, keys) {
       return sendJson(res, 400, { ok: false, error: 'CODE_AND_MACHINE_REQUIRED' });
     }
 
-    const codes = loadCodes().map(normalizeCodeItem);
-    const item = findCode(codes, code);
+    const privateKeyPem = String(process.env.LICENSE_PRIVATE_KEY_PEM || '').trim();
+    if (!privateKeyPem) {
+      return sendJson(res, 500, { ok: false, error: 'PRIVATE_KEY_MISSING' });
+    }
 
-    if (!item) {
+    const claim = await claimCode(code, machineId, hostname, platform);
+    if (claim.status === 'not_found') {
       return sendJson(res, 404, { ok: false, error: 'CODE_NOT_FOUND' });
     }
-    if (item.appId && item.appId !== APP_ID) {
+    if (claim.status === 'app_mismatch') {
       return sendJson(res, 400, { ok: false, error: 'CODE_APP_MISMATCH' });
     }
-    if (item.used) {
+    if (claim.status === 'already_used') {
       return sendJson(res, 409, {
         ok: false,
         error: 'CODE_ALREADY_USED',
-        usedAt: item.usedAt,
-        usedBy: item.usedBy
+        usedAt: claim.current?.usedAt || null,
+        usedBy: claim.current?.usedBy || null
       });
     }
+    if (claim.status !== 'claimed' || !claim.code) {
+      return sendJson(res, 409, { ok: false, error: 'ACTIVATION_CONFLICT' });
+    }
 
-    const now = Date.now();
     const payload = {
       appId: APP_ID,
-      codeId: item.code,
+      codeId: claim.code.code,
       machineId,
-      issuedAt: now,
-      expiresAt: now + item.durationMs,
+      issuedAt: claim.code.activation.issuedAt,
+      expiresAt: claim.code.activation.expiresAt,
       hostname,
       platform
     };
 
-    const license = signLicense(privateKey, payload);
-
-    item.used = true;
-    item.usedAt = now;
-    item.usedBy = { machineId, hostname, platform };
-    item.activation = {
-      issuedAt: payload.issuedAt,
-      expiresAt: payload.expiresAt
-    };
-
-    saveCodes(codes);
+    const license = signLicense(privateKeyPem, payload);
 
     return sendJson(res, 200, {
       ok: true,
@@ -292,15 +379,19 @@ async function main() {
   const server = http.createServer((req, res) => {
     handleRequest(req, res, keys).catch((error) => {
       console.error('Request error:', error);
-      sendJson(res, 500, { ok: false, error: 'INTERNAL_ERROR' });
+      sendJson(res, 500, {
+        ok: false,
+        error: 'INTERNAL_ERROR',
+        message: error?.message || String(error)
+      });
     });
   });
 
   server.listen(PORT, () => {
     console.log(`License server running on http://127.0.0.1:${PORT}`);
     console.log(`Admin token: ${ADMIN_TOKEN}`);
-    console.log(`Public key saved to: ${publicKeyPath}`);
-    console.log(`Codes file: ${codesPath}`);
+    console.log(`Storage: mongo`);
+    console.log(`Mongo DB: ${MONGODB_DB_NAME}`);
   });
 }
 

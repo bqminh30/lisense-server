@@ -45,11 +45,14 @@ export default {
         activation: null
       };
 
-      await saveCode(codeData);
+      const created = await saveCode(codeData);
 
-      return json({ ok: true, code: codeData }, { status: 201 });
+      return json({ ok: true, code: created }, { status: 201 });
     } catch (error) {
       console.error('admin/codes failed:', error);
+      if (error?.code === 11000) {
+        return json({ ok: false, error: 'CODE_ALREADY_EXISTS' }, { status: 409 });
+      }
       return json(
         {
           ok: false,

@@ -63,3 +63,13 @@ You can override it:
 ```bash
 set ADMIN_TOKEN=your-secret
 ```
+
+## MongoDB
+
+Both the local sample server and the Vercel deployment use MongoDB now.
+Set:
+
+```bash
+set MONGODB_URI=mongodb+srv://...
+set MONGODB_DB_NAME=amz_license
+```

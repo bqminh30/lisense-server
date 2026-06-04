@@ -1,10 +1,8 @@
-const fs = require('fs');
-const path = require('path');
+const { MongoClient } = require('mongodb');
 
 const APP_ID = 'amz-us-app';
-const rootDir = path.join(__dirname, '..');
-const dataDir = path.join(rootDir, 'data');
-const codesPath = path.join(dataDir, 'codes.json');
+const MONGODB_URI = String(process.env.MONGODB_URI || '').trim();
+const MONGODB_DB_NAME = String(process.env.MONGODB_DB_NAME || 'amz_license').trim();
 
 function parseDurationMs(value) {
   const raw = String(value || '').trim().toLowerCase();
@@ -28,62 +26,86 @@ function parseDurationMs(value) {
   return n * map[unit];
 }
 
-function loadCodes() {
-  if (!fs.existsSync(codesPath)) return [];
-  try {
-    const parsed = JSON.parse(fs.readFileSync(codesPath, 'utf8'));
-    return Array.isArray(parsed) ? parsed : [];
-  } catch (_) {
-    return [];
-  }
+function normalizeCode(value) {
+  return String(value || '').trim();
 }
 
-function saveCodes(codes) {
-  fs.mkdirSync(dataDir, { recursive: true });
-  fs.writeFileSync(codesPath, JSON.stringify(codes, null, 2), 'utf8');
+function buildCodeDoc(input) {
+  const now = Date.now();
+  return {
+    code: normalizeCode(input.code),
+    appId: String(input.appId || APP_ID).trim(),
+    durationMs: Number(input.durationMs || 0),
+    note: String(input.note || '').trim(),
+    createdAt: now,
+    used: false,
+    usedAt: null,
+    usedBy: null,
+    activation: null
+  };
+}
+
+async function getCollection() {
+  if (!MONGODB_URI) {
+    throw new Error('MONGODB_URI_MISSING');
+  }
+
+  const client = new MongoClient(MONGODB_URI);
+  await client.connect();
+  const db = client.db(MONGODB_DB_NAME);
+  const collection = db.collection('codes');
+  await collection.createIndex({ code: 1 }, { unique: true });
+  return { client, collection };
 }
 
 function usage() {
   console.log('Usage: node license-server/tools/create-code.js <CODE> <DURATION> [NOTE]');
   console.log('Examples:');
   console.log('  node license-server/tools/create-code.js 123Abc 12h');
-  console.log('  node license-server/tools/create-code.js 123Abc 3d "client A"');
+  console.log('  node license-server/tools/create-code.js 888XYZ 3d "client A"');
   process.exit(1);
 }
 
-const code = String(process.argv[2] || '').trim();
-const durationArg = String(process.argv[3] || '').trim();
-const note = String(process.argv.slice(4).join(' ') || '').trim();
+async function main() {
+  const code = String(process.argv[2] || '').trim();
+  const durationArg = String(process.argv[3] || '').trim();
+  const note = String(process.argv.slice(4).join(' ') || '').trim();
 
-if (!code || !durationArg) usage();
+  if (!code || !durationArg) usage();
 
-const durationMs = parseDurationMs(durationArg);
-if (!durationMs) {
-  console.error('Invalid duration. Use values like 12h, 3d, 1m, or milliseconds.');
-  process.exit(1);
+  const durationMs = parseDurationMs(durationArg);
+  if (!durationMs) {
+    console.error('Invalid duration. Use values like 12h, 3d, 1m, or milliseconds.');
+    process.exit(1);
+  }
+
+  const { client, collection } = await getCollection();
+  try {
+    const existing = await collection.findOne({ code });
+    if (existing) {
+      console.error(`Code already exists: ${code}`);
+      process.exit(1);
+    }
+
+    const doc = buildCodeDoc({
+      code,
+      appId: APP_ID,
+      durationMs,
+      note
+    });
+
+    await collection.insertOne(doc);
+
+    console.log(`Created code: ${code}`);
+    console.log(`Duration: ${durationArg} (${durationMs} ms)`);
+    if (note) console.log(`Note: ${note}`);
+    console.log(`Database: ${MONGODB_DB_NAME}`);
+  } finally {
+    await client.close();
+  }
 }
 
-const codes = loadCodes();
-if (codes.some((item) => String(item.code || '').trim() === code)) {
-  console.error(`Code already exists: ${code}`);
+main().catch((error) => {
+  console.error(error.message || error);
   process.exit(1);
-}
-
-codes.push({
-  code,
-  appId: APP_ID,
-  durationMs,
-  note,
-  createdAt: Date.now(),
-  used: false,
-  usedAt: null,
-  usedBy: null,
-  activation: null
 });
-
-saveCodes(codes);
-
-console.log(`Created code: ${code}`);
-console.log(`Duration: ${durationArg} (${durationMs} ms)`);
-if (note) console.log(`Note: ${note}`);
-console.log(`Saved to: ${codesPath}`);

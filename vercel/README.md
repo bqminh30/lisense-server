@@ -15,7 +15,8 @@ This folder is ready to deploy to Vercel as a separate project.
 - `ADMIN_TOKEN`
 - `LICENSE_PRIVATE_KEY_PEM`
 - `LICENSE_PUBLIC_KEY_PEM`
-- `BLOB_READ_WRITE_TOKEN`
+- `MONGODB_URI`
+- `MONGODB_DB_NAME` optional, defaults to `amz_license`
 
 ## Deploy
 
@@ -40,3 +41,9 @@ curl -X POST "https://your-project.vercel.app/api/activate" ^
   -H "Content-Type: application/json" ^
   -d "{\"appId\":\"amz-us-app\",\"code\":\"123abc\",\"machineId\":\"abc\",\"hostname\":\"PC\",\"platform\":\"win32\"}"
 ```
+
+## Mongo notes
+
+- Use a MongoDB Atlas connection string, typically `mongodb+srv://...`
+- Make sure your Atlas network access allows Vercel
+- If you rotate the database, redeploy the project so new deployments pick up the new env vars
