@@ -14,6 +14,10 @@ export function json(data, init = {}) {
   });
 }
 
+export function getBlobReadWriteToken() {
+  return String(process.env.BLOB_READ_WRITE_TOKEN || '').trim();
+}
+
 export function requireAdmin(request) {
   return String(request.headers.get('x-admin-token') || '') === String(process.env.ADMIN_TOKEN || '');
 }
@@ -64,7 +68,12 @@ export async function readBlobJson(pathname) {
   });
   const blob = (page.blobs || []).find((item) => item.pathname === pathname);
   if (!blob || !blob.downloadUrl) return null;
-  const text = await (await fetch(blob.downloadUrl)).text();
+  const headers = {};
+  const token = getBlobReadWriteToken();
+  if (token) {
+    headers.Authorization = `Bearer ${token}`;
+  }
+  const text = await (await fetch(blob.downloadUrl, { headers })).text();
   return JSON.parse(text);
 }
 
@@ -101,7 +110,12 @@ export async function listCodes() {
 
     for (const blob of page.blobs || []) {
       try {
-        const text = await (await fetch(blob.downloadUrl)).text();
+        const headers = {};
+        const token = getBlobReadWriteToken();
+        if (token) {
+          headers.Authorization = `Bearer ${token}`;
+        }
+        const text = await (await fetch(blob.downloadUrl, { headers })).text();
         items.push(JSON.parse(text));
       } catch (_) {}
     }

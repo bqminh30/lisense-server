@@ -48,10 +48,9 @@ Supported durations:
 set AMZ_LICENSE_SERVER_URL=http://127.0.0.1:8787
 ```
 
-The client will automatically look for the public key at:
+The client will fetch the public key from:
 
-- `src/data/license_public.pem`
-- `license-server/keys/public.pem`
+- `GET /api/public-key`
 
 ## Admin token
 
