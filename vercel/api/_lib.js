@@ -65,7 +65,8 @@ export function signLicense(privateKeyPem, payload) {
 export async function readBlobJson(pathname) {
   const page = await list({
     prefix: pathname,
-    limit: 1
+    limit: 1,
+    token: getBlobReadWriteToken() || undefined
   });
   const blob = (page.blobs || []).find((item) => item.pathname === pathname);
   if (!blob || !blob.downloadUrl) return null;
@@ -82,7 +83,8 @@ export async function writeBlobJson(pathname, value) {
   await put(pathname, JSON.stringify(value, null, 2), {
     access: BLOB_ACCESS_MODE,
     contentType: 'application/json',
-    overwrite: true
+    overwrite: true,
+    token: getBlobReadWriteToken() || undefined
   });
 }
 
@@ -106,7 +108,8 @@ export async function listCodes() {
     const page = await list({
       prefix: `${CODE_PREFIX}/`,
       limit: 100,
-      cursor
+      cursor,
+      token: getBlobReadWriteToken() || undefined
     });
 
     for (const blob of page.blobs || []) {
