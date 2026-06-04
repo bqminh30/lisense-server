@@ -3,6 +3,7 @@ import { put, list } from '@vercel/blob';
 
 export const APP_ID = 'amz-us-app';
 export const CODE_PREFIX = 'amz-license/codes';
+export const BLOB_ACCESS_MODE = String(process.env.BLOB_ACCESS_MODE || 'public').trim() === 'private' ? 'private' : 'public';
 
 export function json(data, init = {}) {
   return Response.json(data, {
@@ -79,7 +80,7 @@ export async function readBlobJson(pathname) {
 
 export async function writeBlobJson(pathname, value) {
   await put(pathname, JSON.stringify(value, null, 2), {
-    access: 'private',
+    access: BLOB_ACCESS_MODE,
     contentType: 'application/json',
     overwrite: true
   });
