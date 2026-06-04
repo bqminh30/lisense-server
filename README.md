@@ -28,10 +28,15 @@ Supported durations:
 ## Endpoint
 
 - `GET /health`
+- `GET /api/health`
 - `GET /public-key`
+- `GET /api/public-key`
 - `POST /activate`
+- `POST /api/activate`
 - `GET /admin/codes`
+- `GET /api/admin/codes`
 - `POST /admin/codes`
+- `POST /api/admin/codes`
 
 ## Local testing
 

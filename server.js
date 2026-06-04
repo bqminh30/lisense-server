@@ -147,8 +147,9 @@ function normalizeCodeItem(item) {
 async function handleRequest(req, res, keys) {
   const { privateKey, publicKey } = keys;
   const url = new URL(req.url, `http://${req.headers.host}`);
+  const pathname = url.pathname.replace(/^\/api/, '') || '/';
 
-  if (req.method === 'GET' && url.pathname === '/health') {
+  if (req.method === 'GET' && (pathname === '/health' || pathname === '/')) {
     return sendJson(res, 200, {
       ok: true,
       appId: APP_ID,
@@ -156,14 +157,14 @@ async function handleRequest(req, res, keys) {
     });
   }
 
-  if (req.method === 'GET' && url.pathname === '/public-key') {
+  if (req.method === 'GET' && pathname === '/public-key') {
     return sendJson(res, 200, {
       ok: true,
       publicKey
     });
   }
 
-  if (req.method === 'GET' && url.pathname === '/admin/codes') {
+  if (req.method === 'GET' && pathname === '/admin/codes') {
     if (!authAdmin(req)) {
       return sendJson(res, 401, { ok: false, error: 'UNAUTHORIZED' });
     }
@@ -175,7 +176,7 @@ async function handleRequest(req, res, keys) {
     });
   }
 
-  if (req.method === 'POST' && url.pathname === '/admin/codes') {
+  if (req.method === 'POST' && pathname === '/admin/codes') {
     if (!authAdmin(req)) {
       return sendJson(res, 401, { ok: false, error: 'UNAUTHORIZED' });
     }
@@ -219,7 +220,7 @@ async function handleRequest(req, res, keys) {
     });
   }
 
-  if (req.method === 'POST' && url.pathname === '/activate') {
+  if (req.method === 'POST' && pathname === '/activate') {
     const body = await readJson(req);
     const appId = String(body.appId || '').trim();
     const code = String(body.code || '').trim();
