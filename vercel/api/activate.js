@@ -42,6 +42,26 @@ export default {
           usedBy: claim.current?.usedBy || null
         }, { status: 409 });
       }
+      if (claim.status === 'reuse_same_machine') {
+        const payload = {
+          appId: 'amz-us-app',
+          codeId: claim.current.code,
+          machineId,
+          issuedAt: claim.current.activation?.issuedAt,
+          expiresAt: claim.current.activation?.expiresAt,
+          hostname,
+          platform
+        };
+
+        const license = signLicense(privateKeyPem, payload);
+
+        return json({
+          ok: true,
+          license,
+          payload,
+          reused: true
+        });
+      }
       if (claim.status !== 'claimed' || !claim.code) {
         return json({ ok: false, error: 'ACTIVATION_CONFLICT' }, { status: 409 });
       }

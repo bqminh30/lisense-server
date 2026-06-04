@@ -201,7 +201,12 @@ async function claimCode(code, machineId, hostname, platform) {
 
   if (!current) return { status: 'not_found' };
   if (current.appId && current.appId !== APP_ID) return { status: 'app_mismatch' };
-  if (current.used) return { status: 'already_used', current };
+  if (current.used) {
+    if (current.usedBy?.machineId && current.usedBy.machineId === machineId && current.activation) {
+      return { status: 'reuse_same_machine', current };
+    }
+    return { status: 'already_used', current };
+  }
 
   const activation = {
     issuedAt: now,
@@ -229,7 +234,12 @@ async function claimCode(code, machineId, hostname, platform) {
     const fresh = await collection.findOne({ code: normalizedCode });
     if (!fresh) return { status: 'not_found' };
     if (fresh.appId && fresh.appId !== APP_ID) return { status: 'app_mismatch' };
-    if (fresh.used) return { status: 'already_used', current: fresh };
+    if (fresh.used) {
+      if (fresh.usedBy?.machineId && fresh.usedBy.machineId === machineId && fresh.activation) {
+        return { status: 'reuse_same_machine', current: fresh };
+      }
+      return { status: 'already_used', current: fresh };
+    }
     return { status: 'conflict' };
   }
 
@@ -345,6 +355,26 @@ async function handleRequest(req, res, keys) {
         error: 'CODE_ALREADY_USED',
         usedAt: claim.current?.usedAt || null,
         usedBy: claim.current?.usedBy || null
+      });
+    }
+    if (claim.status === 'reuse_same_machine') {
+      const payload = {
+        appId: APP_ID,
+        codeId: claim.current.code,
+        machineId,
+        issuedAt: claim.current.activation?.issuedAt,
+        expiresAt: claim.current.activation?.expiresAt,
+        hostname,
+        platform
+      };
+
+      const license = signLicense(privateKeyPem, payload);
+
+      return sendJson(res, 200, {
+        ok: true,
+        license,
+        payload,
+        reused: true
       });
     }
     if (claim.status !== 'claimed' || !claim.code) {

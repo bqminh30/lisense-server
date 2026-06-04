@@ -164,6 +164,13 @@ export async function claimCodeForActivation(code, machineId, hostname, platform
   }
 
   if (current.used) {
+    if (current.usedBy?.machineId && current.usedBy.machineId === machineId && current.activation) {
+      return {
+        status: 'reuse_same_machine',
+        current
+      };
+    }
+
     return {
       status: 'already_used',
       current
@@ -200,6 +207,13 @@ export async function claimCodeForActivation(code, machineId, hostname, platform
       return { status: 'not_found' };
     }
     if (fresh.used) {
+      if (fresh.usedBy?.machineId && fresh.usedBy.machineId === machineId && fresh.activation) {
+        return {
+          status: 'reuse_same_machine',
+          current: fresh
+        };
+      }
+
       return {
         status: 'already_used',
         current: fresh
