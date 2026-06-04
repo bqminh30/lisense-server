@@ -223,6 +223,9 @@ async function claimCode(code, machineId, hostname, platform) {
   if (current.boundMachineId && current.boundMachineId !== normalizedMachineId) {
     return { status: 'machine_mismatch', current };
   }
+  if (current.activation?.expiresAt && Number(current.activation.expiresAt) <= now) {
+    return { status: 'expired', current };
+  }
   if (current.used) {
     if (current.usedBy?.machineId && current.usedBy.machineId === normalizedMachineId && current.activation) {
       return { status: 'reuse_same_machine', current };
@@ -258,6 +261,9 @@ async function claimCode(code, machineId, hostname, platform) {
     if (fresh.appId && fresh.appId !== APP_ID) return { status: 'app_mismatch' };
     if (fresh.boundMachineId && fresh.boundMachineId !== normalizedMachineId) {
       return { status: 'machine_mismatch', current: fresh };
+    }
+    if (fresh.activation?.expiresAt && Number(fresh.activation.expiresAt) <= now) {
+      return { status: 'expired', current: fresh };
     }
     if (fresh.used) {
       if (fresh.usedBy?.machineId && fresh.usedBy.machineId === normalizedMachineId && fresh.activation) {
@@ -382,6 +388,13 @@ async function handleRequest(req, res, keys) {
         error: 'CODE_MACHINE_MISMATCH',
         boundMachineId: claim.current?.boundMachineId || null,
         currentMachineId: machineId
+      });
+    }
+    if (claim.status === 'expired') {
+      return sendJson(res, 410, {
+        ok: false,
+        error: 'LICENSE_EXPIRED',
+        expiresAt: claim.current?.activation?.expiresAt || null
       });
     }
     if (claim.status === 'already_used') {

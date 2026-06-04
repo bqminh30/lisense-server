@@ -190,6 +190,13 @@ export async function claimCodeForActivation(code, machineId, hostname, platform
     };
   }
 
+  if (current.activation?.expiresAt && Number(current.activation.expiresAt) <= now) {
+    return {
+      status: 'expired',
+      current
+    };
+  }
+
   if (current.used) {
     if (current.usedBy?.machineId && current.usedBy.machineId === normalizedMachineId && current.activation) {
       return {
@@ -233,8 +240,14 @@ export async function claimCodeForActivation(code, machineId, hostname, platform
     if (!fresh) {
       return { status: 'not_found' };
     }
+    if (fresh.activation?.expiresAt && Number(fresh.activation.expiresAt) <= now) {
+      return {
+        status: 'expired',
+        current: fresh
+      };
+    }
     if (fresh.used) {
-      if (fresh.usedBy?.machineId && fresh.usedBy.machineId === machineId && fresh.activation) {
+      if (fresh.usedBy?.machineId && fresh.usedBy.machineId === normalizedMachineId && fresh.activation) {
         return {
           status: 'reuse_same_machine',
           current: fresh

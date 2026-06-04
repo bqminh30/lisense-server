@@ -42,6 +42,13 @@ export default {
           currentMachineId: machineId
         }, { status: 400 });
       }
+      if (claim.status === 'expired') {
+        return json({
+          ok: false,
+          error: 'LICENSE_EXPIRED',
+          expiresAt: claim.current?.activation?.expiresAt || null
+        }, { status: 410 });
+      }
       if (claim.status === 'already_used') {
         return json({
           ok: false,
