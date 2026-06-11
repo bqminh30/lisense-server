@@ -9,9 +9,12 @@ const PORT = Number(process.env.PORT || 8787);
 const ADMIN_TOKEN = String(process.env.ADMIN_TOKEN || 'dev-admin-token');
 const MONGODB_URI = String(process.env.MONGODB_URI || '').trim();
 const MONGODB_DB_NAME = String(process.env.MONGODB_DB_NAME || 'amz_license').trim();
+const USE_MONGO = Boolean(MONGODB_URI);
 
 const rootDir = __dirname;
 const keysDir = path.join(rootDir, 'keys');
+const dataDir = path.join(rootDir, 'data');
+const localCodesPath = path.join(dataDir, 'codes.json');
 const privateKeyPath = path.join(keysDir, 'private.pem');
 const publicKeyPath = path.join(keysDir, 'public.pem');
 
@@ -133,6 +136,101 @@ function buildCodeDoc(input) {
   };
 }
 
+function ensureLocalStore() {
+  fs.mkdirSync(dataDir, { recursive: true });
+  if (!fs.existsSync(localCodesPath)) {
+    fs.writeFileSync(localCodesPath, JSON.stringify({ codes: [] }, null, 2), 'utf8');
+  }
+}
+
+function readLocalState() {
+  ensureLocalStore();
+  try {
+    const parsed = JSON.parse(fs.readFileSync(localCodesPath, 'utf8'));
+    return {
+      codes: Array.isArray(parsed.codes) ? parsed.codes : []
+    };
+  } catch (_) {
+    return { codes: [] };
+  }
+}
+
+function writeLocalState(state) {
+  ensureLocalStore();
+  fs.writeFileSync(
+    localCodesPath,
+    JSON.stringify(
+      {
+        codes: Array.isArray(state?.codes) ? state.codes : []
+      },
+      null,
+      2
+    ),
+    'utf8'
+  );
+}
+
+async function listCodesLocal() {
+  const state = readLocalState();
+  return [...state.codes].sort((a, b) => Number(b.createdAt || 0) - Number(a.createdAt || 0));
+}
+
+async function loadCodeLocal(code) {
+  const state = readLocalState();
+  return state.codes.find((entry) => entry.code === normalizeCode(code)) || null;
+}
+
+async function saveCodeLocal(codeData) {
+  const state = readLocalState();
+  const doc = buildCodeDoc(codeData);
+  const existing = state.codes.find((entry) => entry.code === doc.code);
+  if (existing) {
+    const error = new Error('CODE_ALREADY_EXISTS');
+    error.code = 11000;
+    throw error;
+  }
+
+  state.codes.push(doc);
+  writeLocalState(state);
+  return { ...doc };
+}
+
+async function claimCodeLocal(code, machineId, hostname, platform) {
+  const state = readLocalState();
+  const normalizedCode = normalizeCode(code);
+  const normalizedMachineId = normalizeCode(machineId);
+  const current = state.codes.find((entry) => entry.code === normalizedCode);
+  const now = Date.now();
+
+  if (!current) return { status: 'not_found' };
+  if (current.appId && current.appId !== APP_ID) return { status: 'app_mismatch' };
+  if (current.boundMachineId && current.boundMachineId !== normalizedMachineId) {
+    return { status: 'machine_mismatch', current };
+  }
+  if (current.activation?.expiresAt && Number(current.activation.expiresAt) <= now) {
+    return { status: 'expired', current };
+  }
+  if (current.used) {
+    if (current.usedBy?.machineId && current.usedBy.machineId === normalizedMachineId && current.activation) {
+      return { status: 'reuse_same_machine', current };
+    }
+    return { status: 'already_used', current };
+  }
+
+  const activation = {
+    issuedAt: now,
+    expiresAt: now + Number(current.durationMs || 0)
+  };
+
+  current.used = true;
+  current.usedAt = now;
+  current.usedBy = { machineId: normalizedMachineId, hostname, platform };
+  current.activation = activation;
+  writeLocalState(state);
+
+  return { status: 'claimed', code: current };
+}
+
 function signLicense(privateKey, payload) {
   const normalizedPrivateKey = normalizePem(privateKey);
   if (!normalizedPrivateKey) {
@@ -180,6 +278,10 @@ async function getCodesCollection() {
 }
 
 async function ensureIndexes() {
+  if (!USE_MONGO) {
+    return;
+  }
+
   if (!indexesPromise) {
     indexesPromise = (async () => {
       const collection = await getCodesCollection();
@@ -192,18 +294,30 @@ async function ensureIndexes() {
 }
 
 async function listCodes() {
+  if (!USE_MONGO) {
+    return listCodesLocal();
+  }
+
   await ensureIndexes();
   const collection = await getCodesCollection();
   return collection.find({}).sort({ createdAt: -1 }).toArray();
 }
 
 async function loadCode(code) {
+  if (!USE_MONGO) {
+    return loadCodeLocal(code);
+  }
+
   await ensureIndexes();
   const collection = await getCodesCollection();
   return collection.findOne({ code: normalizeCode(code) });
 }
 
 async function saveCode(codeData) {
+  if (!USE_MONGO) {
+    return saveCodeLocal(codeData);
+  }
+
   await ensureIndexes();
   const collection = await getCodesCollection();
   const doc = buildCodeDoc(codeData);
@@ -212,6 +326,10 @@ async function saveCode(codeData) {
 }
 
 async function claimCode(code, machineId, hostname, platform) {
+  if (!USE_MONGO) {
+    return claimCodeLocal(code, machineId, hostname, platform);
+  }
+
   await ensureIndexes();
   const collection = await getCodesCollection();
   const normalizedCode = normalizeCode(code);
@@ -288,7 +406,7 @@ async function handleRequest(req, res, keys) {
       ok: true,
       appId: APP_ID,
       port: PORT,
-      storage: 'mongo'
+      storage: USE_MONGO ? 'mongo' : 'local-file'
     });
   }
 
@@ -376,7 +494,7 @@ async function handleRequest(req, res, keys) {
       return sendJson(res, 500, { ok: false, error: 'PRIVATE_KEY_MISSING' });
     }
 
-    const claim = await claimCode(code, machineId, hostname, platform);
+  const claim = await claimCode(code, machineId, hostname, platform);
     if (claim.status === 'not_found') {
       return sendJson(res, 404, { ok: false, error: 'CODE_NOT_FOUND' });
     }
@@ -469,8 +587,10 @@ async function main() {
   server.listen(PORT, () => {
     console.log(`License server running on http://127.0.0.1:${PORT}`);
     console.log(`Admin token: ${ADMIN_TOKEN}`);
-    console.log(`Storage: mongo`);
-    console.log(`Mongo DB: ${MONGODB_DB_NAME}`);
+    console.log(`Storage: ${USE_MONGO ? 'mongo' : 'local-file'}`);
+    if (USE_MONGO) {
+      console.log(`Mongo DB: ${MONGODB_DB_NAME}`);
+    }
   });
 }
 
